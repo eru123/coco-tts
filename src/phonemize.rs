@@ -2,20 +2,30 @@ use crate::voice::VoiceConfig;
 use anyhow::{bail, Context, Result};
 use std::process::Command;
 
+/// A user pronunciation entry: a word as written, and the text it should be
+/// spoken as instead (from the pronunciation dictionary file).
+pub type Dictionary = Vec<(String, String)>;
+
 /// Phoneme id sequences, one per sentence, each framed with BOS/EOS ids
 /// (and a pause id when the sentence ended on punctuation), matching the
 /// contract the Piper VITS models were exported with.
-pub fn phoneme_ids(config: &VoiceConfig, text: &str) -> Result<Vec<Vec<i64>>> {
+pub fn phoneme_ids(
+    config: &VoiceConfig,
+    espeak_voice: &str,
+    dictionary: &Dictionary,
+    text: &str,
+) -> Result<Vec<Vec<i64>>> {
     if config.phoneme_type != "espeak" {
         bail!(
             "voice uses '{}' phonemization, which is not supported yet",
             config.phoneme_type
         );
     }
+    let text = apply_dictionary(text, dictionary);
     let map = &config.phoneme_id_map;
     let mut sentences = Vec::new();
-    for (body, ender) in split_sentences(text) {
-        let ipa = espeak_ipa(&config.espeak.voice, &body)?;
+    for (body, ender) in split_sentences(&text) {
+        let ipa = espeak_ipa(espeak_voice, &body)?;
         let mut ids: Vec<i64> = Vec::new();
         extend_by_symbol(&mut ids, map, "^");
         for (i, word) in ipa.split_whitespace().enumerate() {
@@ -38,6 +48,55 @@ pub fn phoneme_ids(config: &VoiceConfig, text: &str) -> Result<Vec<Vec<i64>>> {
         bail!("text produced no phonemes");
     }
     Ok(sentences)
+}
+
+/// The raw IPA espeak-ng produces for each sentence, for inspection.
+pub fn ipa_sentences(espeak_voice: &str, dictionary: &Dictionary, text: &str) -> Result<Vec<String>> {
+    let text = apply_dictionary(text, dictionary);
+    let mut out = Vec::new();
+    for (body, ender) in split_sentences(&text) {
+        let mut ipa = espeak_ipa(espeak_voice, &body)?;
+        if let Some(ender) = ender {
+            ipa.push(ender);
+        }
+        out.push(ipa);
+    }
+    Ok(out)
+}
+
+/// Replace dictionary words with their spoken-as text. Matches whole words,
+/// case-insensitively; anything that is not a letter, digit, apostrophe or
+/// hyphen counts as a word boundary.
+fn apply_dictionary(text: &str, dictionary: &Dictionary) -> String {
+    if dictionary.is_empty() {
+        return text.to_string();
+    }
+    let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '\'' || ch == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut pending = String::new();
+    for ch in text.chars() {
+        if is_word_char(ch) {
+            pending.push(ch);
+        } else {
+            if !pending.is_empty() {
+                out.push_str(&lookup_word(&pending, dictionary));
+                pending.clear();
+            }
+            out.push(ch);
+        }
+    }
+    out.push_str(&lookup_word(&pending, dictionary));
+    out
+}
+
+fn lookup_word(word: &str, dictionary: &Dictionary) -> String {
+    let lower = word.to_lowercase();
+    for (entry, replacement) in dictionary {
+        if *entry == lower {
+            return replacement.clone();
+        }
+    }
+    word.to_string()
 }
 
 /// Map a phoneme to ids: the whole token first (multi-codepoint symbols),

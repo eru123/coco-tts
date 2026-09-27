@@ -13,6 +13,9 @@ pub struct VoiceSpec {
     pub hf_dir: &'static str,
     pub fallback_note: Option<&'static str>,
     pub unsupported: Option<&'static str>,
+    /// Phonemize with this espeak-ng voice instead of the model's own; used
+    /// to read one language through a phonetically closer voice.
+    pub espeak_override: Option<&'static str>,
 }
 
 static EN: VoiceSpec = VoiceSpec {
@@ -20,6 +23,7 @@ static EN: VoiceSpec = VoiceSpec {
     hf_dir: "en/en_US/lessac/medium/en_US-lessac-medium",
     fallback_note: None,
     unsupported: None,
+    espeak_override: None,
 };
 
 // No Filipino Piper voice exists upstream; Tagalog text is read through the
@@ -30,6 +34,7 @@ static EN_FIL_FALLBACK: VoiceSpec = VoiceSpec {
     hf_dir: EN.hf_dir,
     fallback_note: Some("no Filipino voice is available yet; using the en_US lessac voice as fallback"),
     unsupported: None,
+    espeak_override: None,
 };
 
 static JA: VoiceSpec = VoiceSpec {
@@ -37,6 +42,7 @@ static JA: VoiceSpec = VoiceSpec {
     hf_dir: "ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium",
     fallback_note: None,
     unsupported: Some("Japanese voices require OpenJTalk phonemization, which is not wired up yet"),
+    espeak_override: None,
 };
 
 static KO: VoiceSpec = VoiceSpec {
@@ -44,6 +50,7 @@ static KO: VoiceSpec = VoiceSpec {
     hf_dir: "ko/ko_KR/kss/medium/ko_KR-kss-medium",
     fallback_note: None,
     unsupported: None,
+    espeak_override: None,
 };
 
 static ZH: VoiceSpec = VoiceSpec {
@@ -51,6 +58,7 @@ static ZH: VoiceSpec = VoiceSpec {
     hf_dir: "zh/zh_CN/huayan/medium/zh_CN-huayan-medium",
     fallback_note: None,
     unsupported: None,
+    espeak_override: None,
 };
 
 pub fn spec_for(lang_code: &str) -> Result<&'static VoiceSpec> {
@@ -113,6 +121,14 @@ impl InferenceSection {
 pub struct LoadedVoice {
     pub model_path: PathBuf,
     pub config: VoiceConfig,
+    pub espeak_override: Option<&'static str>,
+}
+
+impl LoadedVoice {
+    /// The espeak-ng voice phonemization should use for this voice.
+    pub fn espeak_voice(&self) -> &str {
+        self.espeak_override.unwrap_or(&self.config.espeak.voice)
+    }
 }
 
 pub fn models_dir() -> PathBuf {
@@ -139,7 +155,7 @@ pub fn load(lang_code: &str) -> Result<LoadedVoice> {
         .with_context(|| format!("failed to read voice config {}", config_path.display()))?;
     let config: VoiceConfig = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse voice config {}", config_path.display()))?;
-    Ok(LoadedVoice { model_path, config })
+    Ok(LoadedVoice { model_path, config, espeak_override: spec.espeak_override })
 }
 
 fn download(spec: &VoiceSpec, model_path: &PathBuf, config_path: &PathBuf) -> Result<()> {

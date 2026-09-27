@@ -49,6 +49,16 @@ struct Args {
     /// List available audio output devices and exit
     #[arg(long)]
     list_devices: bool,
+
+    /// Phonemize with this espeak-ng voice instead of the voice's own
+    /// (accent override, e.g. en-gb)
+    #[arg(long, value_name = "VOICE")]
+    espeak_voice: Option<String>,
+
+    /// Print the phonemes each segment would be spoken as, then exit
+    /// without synthesizing
+    #[arg(long)]
+    print_phonemes: bool,
 }
 
 enum Language {
@@ -106,6 +116,7 @@ fn main() -> Result<()> {
         }
     }
 
+    let dictionary = load_pronunciation_dictionary();
     let mut wav = None;
     let mut rendered: Vec<(u32, Vec<i16>)> = Vec::new();
     let mut spoke_any = false;
@@ -124,8 +135,19 @@ fn main() -> Result<()> {
         if let Some(note) = voice::spec_for(code).ok().and_then(|spec| spec.fallback_note) {
             eprintln!("[coco-tts] {note}");
         }
+        let espeak_voice = args
+            .espeak_voice
+            .as_deref()
+            .unwrap_or_else(|| voice.espeak_voice());
 
-        let sentences = phonemize::phoneme_ids(&voice.config, &segment.text)?;
+        if args.print_phonemes {
+            for ipa in phonemize::ipa_sentences(espeak_voice, &dictionary, &segment.text)? {
+                println!("[coco-tts] [{code}] {ipa}");
+            }
+            continue;
+        }
+
+        let sentences = phonemize::phoneme_ids(&voice.config, espeak_voice, &dictionary, &segment.text)?;
         let audio = synthesize::run(&voice, &sentences)?;
         spoke_any = true;
         let pcm: Vec<i16> = audio
@@ -154,6 +176,10 @@ fn main() -> Result<()> {
                 }
             }
         }
+    }
+
+    if args.print_phonemes {
+        return Ok(());
     }
 
     if let Some(writer) = wav {
@@ -277,4 +303,34 @@ fn get_lang_code(lang: &Language) -> &'static str {
         Language::Korean => "kr",
         Language::Chinese => "cn",
     }
+}
+
+/// Load word -> spoken-as entries from the user's pronunciation dictionary
+/// (~/.config/coco-tts/pronunciation.tsv). Missing file is fine; lines look
+/// like `word<TAB>spoken as this`.
+fn load_pronunciation_dictionary() -> phonemize::Dictionary {
+    let path = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("coco-tts")
+        .join("pronunciation.tsv");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut dictionary = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_end();
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        if let Some((word, spoken)) = line.split_once('\t') {
+            let word = word.trim().to_lowercase();
+            let spoken = spoken.trim();
+            if !word.is_empty() && !spoken.is_empty() {
+                dictionary.push((word, spoken.to_string()));
+            }
+        } else {
+            eprintln!("[coco-tts] skipping malformed dictionary line: {line:?}");
+        }
+    }
+    dictionary
 }
