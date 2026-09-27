@@ -1,0 +1,9 @@
+# Rust build artifacts
+target/
+
+# ONNX voice models (downloaded separately, too large for git)
+*.onnx
+*.onnx.json
+
+# Environment / secrets
+.env
