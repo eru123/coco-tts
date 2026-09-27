@@ -2,13 +2,10 @@ use crate::voice::VoiceConfig;
 use anyhow::{bail, Context, Result};
 use std::process::Command;
 
-/// A user pronunciation entry: a word as written, and the text it should be
-/// spoken as instead (from the pronunciation dictionary file).
+/// word -> say it like this, from the pronunciation dictionary file
 pub type Dictionary = Vec<(String, String)>;
 
-/// Phoneme id sequences, one per sentence, each framed with BOS/EOS ids
-/// (and a pause id when the sentence ended on punctuation), matching the
-/// contract the Piper VITS models were exported with.
+/// ids per sentence, BOS/EOS framed. what the piper models expect.
 pub fn phoneme_ids(
     config: &VoiceConfig,
     espeak_voice: &str,
@@ -32,8 +29,7 @@ pub fn phoneme_ids(
                 symbols.push(' ');
             }
             for phone in word.split('|').filter(|p| !p.is_empty()) {
-                // Piper's phonemes are single codepoints, so diphthongs and
-                // stress marks each become their own (padded) symbol.
+                // piper phonemes are single codepoints, diphthongs included
                 symbols.extend(phone.chars());
             }
         }
@@ -44,9 +40,8 @@ pub fn phoneme_ids(
             symbols.push(ender);
         }
 
-        // Piper's training contract: BOS, then a pad id after every symbol
-        // (BOS included), with EOS unpadded at the end. Skipping the pads
-        // compresses the stream and the model mushes words together.
+        // piper pads every symbol, bos included, eos not. skip the pads and
+        // words mush together (good morning -> gudheng)
         let mut ids: Vec<i64> = Vec::new();
         extend_by_symbol(&mut ids, map, "^");
         extend_by_symbol(&mut ids, map, "_");
@@ -63,7 +58,7 @@ pub fn phoneme_ids(
     Ok(sentences)
 }
 
-/// The raw IPA espeak-ng produces for each sentence, for inspection.
+/// raw IPA per sentence, for --print-phonemes
 pub fn ipa_sentences(espeak_voice: &str, dictionary: &Dictionary, text: &str) -> Result<Vec<String>> {
     let text = apply_dictionary(text, dictionary);
     let mut out = Vec::new();
@@ -77,9 +72,7 @@ pub fn ipa_sentences(espeak_voice: &str, dictionary: &Dictionary, text: &str) ->
     Ok(out)
 }
 
-/// Replace dictionary words with their spoken-as text. Matches whole words,
-/// case-insensitively; anything that is not a letter, digit, apostrophe or
-/// hyphen counts as a word boundary.
+/// swap dictionary words for their respelling. whole words, case-insensitive
 fn apply_dictionary(text: &str, dictionary: &Dictionary) -> String {
     if dictionary.is_empty() {
         return text.to_string();
@@ -112,9 +105,8 @@ fn lookup_word(word: &str, dictionary: &Dictionary) -> String {
     word.to_string()
 }
 
-/// Map a phoneme to ids: the whole token first (multi-codepoint symbols),
-/// then each codepoint on its own — symbols with no mapping are skipped,
-/// which is how the upstream Piper pipeline treats them too.
+/// whole token first, then per codepoint. unmapped symbols get skipped,
+/// same as piper
 fn extend_by_symbol(ids: &mut Vec<i64>, map: &std::collections::HashMap<String, Vec<i64>>, symbol: &str) {
     if let Some(symbol_ids) = map.get(symbol) {
         ids.extend_from_slice(symbol_ids);
@@ -127,8 +119,7 @@ fn extend_by_symbol(ids: &mut Vec<i64>, map: &std::collections::HashMap<String, 
     }
 }
 
-/// The pause symbol a sentence ender maps to, falling back to its ASCII
-/// equivalent for CJK punctuation.
+/// pause symbol for a sentence ender, CJK falls back to ascii
 fn resolve_ender(
     map: &std::collections::HashMap<String, Vec<i64>>,
     ender: char,

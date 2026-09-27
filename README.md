@@ -1,84 +1,61 @@
 # coco-tts
 
-Cross-platform local text-to-speech (TTS) CLI powered by Rust and [Piper](https://github.com/rhasspy/piper) ONNX voice models. No cloud, no API keys — phonemization (espeak-ng), inference (ONNX Runtime via `ort`), and playback (`rodio`) all run on your machine.
+tts for the terminal. rust + piper onnx voices, all local, no cloud, no keys.
 
-## Usage
-
-```bash
-# English (default)
-coco-tts "Hello Master Jericho!"
-
-# Filipino
-coco-tts --fil "Kamusta ka boss Jericho!"
-
-# Mixed languages, spoken sequentially
-coco-tts --fil "Kamusta ka boss Jericho!" --en "All tasks completed"
-
-# Korean and Chinese
-coco-tts --kr "안녕하세요, 보스 제리코!" --cn "你好，世界！"
-
-# Headless / scripted: skip playback, write a WAV instead
-coco-tts "Hello Master Jericho!" --out hello.wav --no-play
-
-# Pin playback to a specific device (list them first)
-coco-tts --list-devices
-coco-tts "Hello" --device pulse
-```
-
-Language segments always execute in flag order: `--fil`, `--en`, `--jp`, `--kr`, `--cn`. With no flags, positional text is spoken as English.
-
-## Tweaking pronunciation
-
-A user dictionary rewrites how words are spoken, without rebuilding: add lines to `~/.config/coco-tts/pronunciation.tsv` in the form `word<TAB>say it like this` (case-insensitive, whole-word, `#` starts a comment). Respellings use ordinary letters and hyphens and are applied before phonemization:
+## tldr
 
 ```bash
-jericho	jeh-rih-koh
-coco-tts	ko-ko tee tee ess
-```
-
-Preview what will be said without synthesizing:
-
-```bash
-coco-tts "Hello Master Jericho!" --print-phonemes
-# [en] h|ə|l|ˈoʊ m|ˈæ|s|t|ɚ dʒ|ˈeɪ|ɹ|ˈɪ|k|ˈoʊ!
-```
-
-`--espeak-voice VOICE` overrides the phonemization accent for a run (e.g. `--espeak-voice en-gb` for British diphthongs). Since `--fil` has no Filipino model, it phonemizes through espeak-ng's Indonesian voice — pure vowels and stress patterns much closer to Tagalog — while synthesizing with the English model; per-word trouble cases can be corrected in the dictionary.
-
-## Voices
-
-Voices are resolved from the [piper-voices](https://huggingface.co/rhasspy/piper-voices) collection and downloaded automatically to the platform data dir on first use (Linux `~/.local/share/coco-tts/models/`, macOS `~/Library/Application Support/coco-tts/models/`, Windows `%APPDATA%\coco-tts\models\`).
-
-| Flag | Voice | Status |
-| --- | --- | --- |
-| `--en` | `en_US-lessac-medium` | works |
-| `--fil` | *(no upstream Filipino voice)* | falls back to the `en_US` voice with a warning — Tagalog's phonetic Latin script stays intelligible |
-| `--jp` | `ja_JP-hi_fi_captain-medium` | pending: needs OpenJTalk phonemization, segment is skipped with a notice |
-| `--kr` | `ko_KR-kss-medium` | works |
-| `--cn` | `zh_CN-huayan-medium` | works |
-
-Models are gitignored; swapping any voice is a one-line change to the table in `src/voice.rs`.
-
-## Setup
-
-Requires a Rust toolchain ([rustup](https://rustup.rs/)) and `espeak-ng` for phonemization.
-
-```bash
-# Debian/Ubuntu: rodio needs ALSA headers, phonemization needs espeak-ng
-sudo apt install libasound2-dev espeak-ng
-
+sudo apt install espeak-ng libasound2-dev   # linux, once
 cargo build --release
+coco-tts "Hello Master Jericho!"
 ```
 
-## How it works
+first run pulls the voice (~60MB) into `~/.local/share/coco-tts/models/` and just works after that.
 
-1. Text is split into sentences; each is phonemized with `espeak-ng --ipa` in the voice's language.
-2. Phonemes map to the model's `phoneme_id_map` ids — per codepoint, with the pad id `_` inserted after every symbol (BOS included, EOS excluded), exactly the framing the Piper VITS models were trained on.
-3. `ort` runs the ONNX session (`input`, `input_lengths`, `scales`, `sid`) and the per-sentence audio is stitched with a 200 ms inter-sentence gap.
-4. Audio plays through `rodio`, and `--out` additionally writes a 16-bit mono WAV (`hound`).
+## usage
 
-Playback probes the default output device with a short burst of silence first: on systems where the ALSA default routes into a suspended or cold PipeWire node, the stream can open successfully but never actually consume audio. If the probe stalls, playback automatically falls back through the other output devices (`pulse`, `pipewire`, raw `hw:`), so a flaky default never costs more than a few seconds. `--list-devices` shows what is available and `--device NAME` pins one explicitly.
+```bash
+coco-tts "Hello"                      # english
+coco-tts --fil "Kamusta boss!"        # tagalog
+coco-tts --kr "안녕하세요" --cn "你好"   # korean, chinese
+coco-tts "..." --out out.wav          # also write a wav
+coco-tts "..." --no-play              # skip playback (headless boxes)
+coco-tts "..." --print-phonemes       # show what it'll say, no audio
+coco-tts --list-devices               # audio devices
+coco-tts "..." --device pulse         # force one
+coco-tts "..." --espeak-voice en-gb   # accent swap
+```
 
-## License
+segments run in flag order: fil, en, jp, kr, cn. no flags = positional text is english.
 
-Private repository. All rights reserved.
+## voices
+
+| flag | voice | state |
+| --- | --- | --- |
+| `--en` | en_US-lessac-medium | works |
+| `--fil` | none exists | en model + indonesian phonemization so the vowels aren't mangled |
+| `--jp` | ja_JP-hi_fi_captain-medium | needs openjtalk, skipped for now |
+| `--kr` | ko_KR-kss-medium | works |
+| `--cn` | zh_CN-huayan-medium | works |
+
+models are gitignored, auto-downloaded. want a different voice, edit the table in `src/voice.rs`.
+
+## pronunciation sounds wrong
+
+`~/.config/coco-tts/pronunciation.tsv`, word TAB how it should sound:
+
+```
+jericho	jeh-rih-koh
+```
+
+iterate with `--print-phonemes` until it stops bugging you.
+
+## how it works
+
+espeak-ng makes IPA, that maps to the model's phoneme ids with a pad id after every symbol (that pad matters, skip it and "good morning" comes out "gudheng"), ort runs the vits model, rodio plays it, hound writes the wav if you asked.
+
+playback pokes the default device with a bit of silence first. pipewire sometimes hands you a stream that never plays, so if the probe stalls it moves on to the next device instead of hanging.
+
+needs rust, espeak-ng, and on linux `libasound2-dev`.
+
+private repo, all rights reserved.

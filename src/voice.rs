@@ -13,8 +13,7 @@ pub struct VoiceSpec {
     pub hf_dir: &'static str,
     pub fallback_note: Option<&'static str>,
     pub unsupported: Option<&'static str>,
-    /// Phonemize with this espeak-ng voice instead of the model's own; used
-    /// to read one language through a phonetically closer voice.
+    /// read with this espeak voice instead of the model's own
     pub espeak_override: Option<&'static str>,
 }
 
@@ -26,9 +25,8 @@ static EN: VoiceSpec = VoiceSpec {
     espeak_override: None,
 };
 
-// No Filipino Piper voice exists upstream; Tagalog text is read through the
-// English model, phonemized by espeak-ng's Indonesian voice (a close
-// Austronesian relative: pure vowels, similar stress).
+// no filipino voice exists anywhere. indonesian espeak is close enough
+// (pure vowels), en model speaks it
 static EN_FIL_FALLBACK: VoiceSpec = VoiceSpec {
     file: EN.file,
     hf_dir: EN.hf_dir,
@@ -138,7 +136,7 @@ pub fn models_dir() -> PathBuf {
         .join("models")
 }
 
-/// Resolve (downloading on first use) the voice for a language code.
+/// get the voice for a language, downloading it if missing
 pub fn load(lang_code: &str) -> Result<LoadedVoice> {
     let spec = spec_for(lang_code)?;
     if let Some(reason) = spec.unsupported {

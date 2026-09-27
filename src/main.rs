@@ -89,7 +89,7 @@ fn main() -> Result<()> {
 
     let mut segments: Vec<SpeechSegment> = Vec::new();
 
-    // Priority 1: Check language flag arguments
+    // flags first
     if let Some(text) = args.fil {
         segments.push(SpeechSegment { lang: Language::Filipino, text });
     }
@@ -106,7 +106,7 @@ fn main() -> Result<()> {
         segments.push(SpeechSegment { lang: Language::Chinese, text });
     }
 
-    // Priority 2: Fallback to default positional English text
+    // no flags, positional text as english
     if segments.is_empty() {
         if let Some(text) = args.default_text {
             segments.push(SpeechSegment { lang: Language::English, text });
@@ -201,8 +201,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Append the rendered audio and block until the sink drains. Returns false
-/// if the device never consumes it within the timeout.
+/// block till the sink drains, false if it never does
 fn drain(sink: &rodio::Sink, timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while !sink.empty() {
@@ -214,9 +213,8 @@ fn drain(sink: &rodio::Sink, timeout: std::time::Duration) -> bool {
     true
 }
 
-/// Play on one device. A third of a second of silence is appended first as a
-/// liveness probe: some PipeWire-backed ALSA defaults open successfully but
-/// never run their callback thread, which would otherwise stall silently.
+/// play on one device. a bit of silence goes in first as a probe, pipewire
+/// sometimes hands you a stream that never plays
 fn play_on(device: &rodio::Device, rendered: &[(u32, Vec<i16>)], seconds: f32) -> bool {
     let Ok((stream, handle)) = rodio::OutputStream::try_from_device(device) else {
         return false;
@@ -259,8 +257,7 @@ fn play(rendered: &[(u32, Vec<i16>)], device_name: Option<&str>) -> anyhow::Resu
         return Ok(());
     }
 
-    // The default gets first shot without touching the device list: probing
-    // every device spews ALSA/JACK diagnostics on stderr.
+    // default gets first shot, probing every device spews alsa junk on stderr
     if let Some(default) = rodio::cpal::default_host().default_output_device() {
         if play_on(&default, rendered, seconds) {
             return Ok(());
@@ -305,9 +302,8 @@ fn get_lang_code(lang: &Language) -> &'static str {
     }
 }
 
-/// Load word -> spoken-as entries from the user's pronunciation dictionary
-/// (~/.config/coco-tts/pronunciation.tsv). Missing file is fine; lines look
-/// like `word<TAB>spoken as this`.
+/// word<TAB>respelling entries from ~/.config/coco-tts/pronunciation.tsv.
+/// no file, no problem
 fn load_pronunciation_dictionary() -> phonemize::Dictionary {
     let path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))

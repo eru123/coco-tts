@@ -8,8 +8,7 @@ pub struct Audio {
     pub samples: Vec<f32>,
 }
 
-/// Run each sentence's phoneme ids through the VITS model and stitch the
-/// results together with a short silence between sentences.
+/// run the ids, stitch sentences together with a short gap
 pub fn run(voice: &LoadedVoice, sentences: &[Vec<i64>]) -> Result<Audio> {
     let mut session = Session::builder()
         .and_then(|mut b| b.commit_from_file(&voice.model_path))
