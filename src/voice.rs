@@ -23,18 +23,18 @@ static EN: VoiceSpec = VoiceSpec {
     hf_dir: "en/en_US/lessac/medium/en_US-lessac-medium",
     fallback_note: None,
     unsupported: None,
-    espeak_override: Some("id"),
+    espeak_override: None,
 };
 
 // No Filipino Piper voice exists upstream; Tagalog text is read through the
-// English voice, which stays intelligible since Tagalog spells words
-// phonetically in Latin script.
+// English model, phonemized by espeak-ng's Indonesian voice (a close
+// Austronesian relative: pure vowels, similar stress).
 static EN_FIL_FALLBACK: VoiceSpec = VoiceSpec {
     file: EN.file,
     hf_dir: EN.hf_dir,
     fallback_note: Some("no Filipino voice is available yet; using the en_US lessac voice as fallback"),
     unsupported: None,
-    espeak_override: None,
+    espeak_override: Some("id"),
 };
 
 static JA: VoiceSpec = VoiceSpec {
