@@ -73,7 +73,7 @@ cargo build --release
 ## How it works
 
 1. Text is split into sentences; each is phonemized with `espeak-ng --ipa` in the voice's language.
-2. Phonemes map to the model's `phoneme_id_map` ids (whole symbol first, then per codepoint), framed with BOS/EOS and pause ids — the same contract the Piper VITS models were exported with.
+2. Phonemes map to the model's `phoneme_id_map` ids — per codepoint, with the pad id `_` inserted after every symbol (BOS included, EOS excluded), exactly the framing the Piper VITS models were trained on.
 3. `ort` runs the ONNX session (`input`, `input_lengths`, `scales`, `sid`) and the per-sentence audio is stitched with a 200 ms inter-sentence gap.
 4. Audio plays through `rodio`, and `--out` additionally writes a 16-bit mono WAV (`hound`).
 

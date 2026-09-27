@@ -26,23 +26,36 @@ pub fn phoneme_ids(
     let mut sentences = Vec::new();
     for (body, ender) in split_sentences(&text) {
         let ipa = espeak_ipa(espeak_voice, &body)?;
-        let mut ids: Vec<i64> = Vec::new();
-        extend_by_symbol(&mut ids, map, "^");
+        let mut symbols: Vec<char> = Vec::new();
         for (i, word) in ipa.split_whitespace().enumerate() {
             if i > 0 {
-                extend_by_symbol(&mut ids, map, " ");
+                symbols.push(' ');
             }
             for phone in word.split('|').filter(|p| !p.is_empty()) {
-                extend_by_symbol(&mut ids, map, phone);
+                // Piper's phonemes are single codepoints, so diphthongs and
+                // stress marks each become their own (padded) symbol.
+                symbols.extend(phone.chars());
             }
         }
-        if ids.len() > 1 {
-            if let Some(ender) = ender {
-                extend_ender(&mut ids, map, ender);
-            }
-            extend_by_symbol(&mut ids, map, "$");
-            sentences.push(ids);
+        if symbols.is_empty() {
+            continue;
         }
+        if let Some(ender) = ender.and_then(|e| resolve_ender(map, e)) {
+            symbols.push(ender);
+        }
+
+        // Piper's training contract: BOS, then a pad id after every symbol
+        // (BOS included), with EOS unpadded at the end. Skipping the pads
+        // compresses the stream and the model mushes words together.
+        let mut ids: Vec<i64> = Vec::new();
+        extend_by_symbol(&mut ids, map, "^");
+        extend_by_symbol(&mut ids, map, "_");
+        for symbol in &symbols {
+            extend_by_symbol(&mut ids, map, &symbol.to_string());
+            extend_by_symbol(&mut ids, map, "_");
+        }
+        extend_by_symbol(&mut ids, map, "$");
+        sentences.push(ids);
     }
     if sentences.is_empty() {
         bail!("text produced no phonemes");
@@ -114,7 +127,12 @@ fn extend_by_symbol(ids: &mut Vec<i64>, map: &std::collections::HashMap<String, 
     }
 }
 
-fn extend_ender(ids: &mut Vec<i64>, map: &std::collections::HashMap<String, Vec<i64>>, ender: char) {
+/// The pause symbol a sentence ender maps to, falling back to its ASCII
+/// equivalent for CJK punctuation.
+fn resolve_ender(
+    map: &std::collections::HashMap<String, Vec<i64>>,
+    ender: char,
+) -> Option<char> {
     let ascii_equivalent = match ender {
         '。' => Some('.'),
         '！' => Some('!'),
@@ -124,12 +142,10 @@ fn extend_ender(ids: &mut Vec<i64>, map: &std::collections::HashMap<String, Vec<
         '：' => Some(':'),
         _ => None,
     };
-    for candidate in [Some(ender), ascii_equivalent].into_iter().flatten() {
-        if let Some(candidate_ids) = map.get(&candidate.to_string()) {
-            ids.extend_from_slice(candidate_ids);
-            return;
-        }
-    }
+    [Some(ender), ascii_equivalent]
+        .into_iter()
+        .flatten()
+        .find(|candidate| map.contains_key(&candidate.to_string()))
 }
 
 fn split_sentences(text: &str) -> Vec<(String, Option<char>)> {
