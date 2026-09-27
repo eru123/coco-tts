@@ -58,4 +58,4 @@ playback pokes the default device with a bit of silence first. pipewire sometime
 
 needs rust, espeak-ng, and on linux `libasound2-dev`.
 
-private repo, all rights reserved.
+MIT, see LICENSE.
