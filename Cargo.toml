@@ -12,3 +12,4 @@ serde_json = "1.0"
 hound = "3.5"    # WAV encoder/decoder
 anyhow = "1.0"
 dirs = "5.0"     # Platform data directory resolution (~/.local/share, %APPDATA%, ...)
+ureq = "2"       # Voice model downloads from the piper-voices collection

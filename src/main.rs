@@ -1,5 +1,6 @@
 use clap::Parser;
-use std::path::PathBuf;
+
+mod voice;
 
 #[derive(Parser, Debug)]
 #[command(name = "coco-tts", author, version, about = "Cross-platform local TTS CLI powered by Rust and Piper ONNX")]
@@ -79,11 +80,21 @@ fn main() -> anyhow::Result<()> {
 
     // Process each speech segment through ONNX runtime and append to audio sink
     for segment in segments {
-        let model_path = get_model_path(&segment.lang)?;
-        println!("[coco-tts] Synthesizing {:?} text: \"{}\"", get_lang_code(&segment.lang), segment.text);
+        let code = get_lang_code(&segment.lang);
+        println!("[coco-tts] Synthesizing [{}] \"{}\"", code, segment.text);
+
+        if let Err(e) = voice::load(code) {
+            eprintln!("[coco-tts] skipping {code} segment: {e:#}");
+            continue;
+        }
+        if let Some(spec) = voice::spec_for(code).ok().filter(|s| s.fallback_note.is_some()) {
+            if let Some(note) = spec.fallback_note {
+                eprintln!("[coco-tts] {note}");
+            }
+        }
 
         // TODO: Pass phonemized text through ONNX model using `ort` crate
-        // let audio_samples = synthesize_onnx(&model_path, &segment.text)?;
+        // let audio_samples = synthesize(&loaded, &segment.text)?;
         // sink.append(rodio::buffer::SamplesBuffer::new(1, 22050, audio_samples));
     }
 
@@ -99,21 +110,4 @@ fn get_lang_code(lang: &Language) -> &'static str {
         Language::Korean => "kr",
         Language::Chinese => "cn",
     }
-}
-
-fn get_model_path(lang: &Language) -> anyhow::Result<PathBuf> {
-    let base_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("coco-tts")
-        .join("models");
-
-    let model_name = match lang {
-        Language::Filipino => "fil_PH-mms-medium.onnx",
-        Language::English => "en_US-lessac-medium.onnx",
-        Language::Japanese => "ja_JP-lessac-medium.onnx",
-        Language::Korean => "ko_KR-vits-medium.onnx",
-        Language::Chinese => "zh_CN-huayan-medium.onnx",
-    };
-
-    Ok(base_dir.join(model_name))
 }
