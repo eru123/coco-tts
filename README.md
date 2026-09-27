@@ -19,6 +19,10 @@ coco-tts --kr "안녕하세요, 보스 제리코!" --cn "你好，世界！"
 
 # Headless / scripted: skip playback, write a WAV instead
 coco-tts "Hello Master Jericho!" --out hello.wav --no-play
+
+# Pin playback to a specific device (list them first)
+coco-tts --list-devices
+coco-tts "Hello" --device pulse
 ```
 
 Language segments always execute in flag order: `--fil`, `--en`, `--jp`, `--kr`, `--cn`. With no flags, positional text is spoken as English.
@@ -54,6 +58,8 @@ cargo build --release
 2. Phonemes map to the model's `phoneme_id_map` ids (whole symbol first, then per codepoint), framed with BOS/EOS and pause ids — the same contract the Piper VITS models were exported with.
 3. `ort` runs the ONNX session (`input`, `input_lengths`, `scales`, `sid`) and the per-sentence audio is stitched with a 200 ms inter-sentence gap.
 4. Audio plays through `rodio`, and `--out` additionally writes a 16-bit mono WAV (`hound`).
+
+Playback probes the default output device with a short burst of silence first: on systems where the ALSA default routes into a suspended or cold PipeWire node, the stream can open successfully but never actually consume audio. If the probe stalls, playback automatically falls back through the other output devices (`pulse`, `pipewire`, raw `hw:`), so a flaky default never costs more than a few seconds. `--list-devices` shows what is available and `--device NAME` pins one explicitly.
 
 ## License
 

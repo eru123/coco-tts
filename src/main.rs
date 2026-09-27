@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use rodio::cpal::traits::{DeviceTrait as _, HostTrait as _};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -40,6 +41,14 @@ struct Args {
     /// Skip audio playback (useful on headless machines; pair with --out)
     #[arg(long)]
     no_play: bool,
+
+    /// Play through a specific audio device (see --list-devices)
+    #[arg(long, value_name = "NAME")]
+    device: Option<String>,
+
+    /// List available audio output devices and exit
+    #[arg(long)]
+    list_devices: bool,
 }
 
 enum Language {
@@ -57,6 +66,17 @@ struct SpeechSegment {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.list_devices {
+        let default = rodio::cpal::default_host().default_output_device().and_then(|d| d.name().ok());
+        for device in rodio::cpal::default_host().output_devices().ok().into_iter().flatten() {
+            let name = device.name().unwrap_or_else(|_| "<unnamed>".to_string());
+            let marker = if Some(&name) == default.as_ref() { " (default)" } else { "" };
+            println!("{name}{marker}");
+        }
+        return Ok(());
+    }
+
     let mut segments: Vec<SpeechSegment> = Vec::new();
 
     // Priority 1: Check language flag arguments
@@ -86,27 +106,9 @@ fn main() -> Result<()> {
         }
     }
 
-    // Playback is best effort so headless machines can still render to a file.
-    let sink = if args.no_play {
-        None
-    } else {
-        match rodio::OutputStream::try_default() {
-            Ok((_stream, handle)) => Some(rodio::Sink::try_new(&handle)?),
-            Err(_) => {
-                if args.out.is_none() {
-                    return Err(anyhow!(
-                        "no audio output device found; pass --out <file.wav> or --no-play"
-                    ));
-                }
-                eprintln!("[coco-tts] no audio output device; writing WAV only");
-                None
-            }
-        }
-    };
-
     let mut wav = None;
+    let mut rendered: Vec<(u32, Vec<i16>)> = Vec::new();
     let mut spoke_any = false;
-    let mut spoken_seconds = 0.0_f32;
 
     for segment in &segments {
         let code = get_lang_code(&segment.lang);
@@ -126,16 +128,12 @@ fn main() -> Result<()> {
         let sentences = phonemize::phoneme_ids(&voice.config, &segment.text)?;
         let audio = synthesize::run(&voice, &sentences)?;
         spoke_any = true;
-        spoken_seconds += audio.samples.len() as f32 / audio.sample_rate as f32;
-
-        if let Some(sink) = &sink {
-            let pcm: Vec<i16> = audio
-                .samples
-                .iter()
-                .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16)
-                .collect();
-            sink.append(rodio::buffer::SamplesBuffer::new(1, audio.sample_rate, pcm));
-        }
+        let pcm: Vec<i16> = audio
+            .samples
+            .iter()
+            .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16)
+            .collect();
+        rendered.push((audio.sample_rate, pcm));
 
         if let Some(path) = &args.out {
             if wav.is_none() {
@@ -164,20 +162,111 @@ fn main() -> Result<()> {
     if !spoke_any {
         return Err(anyhow!("no segments could be synthesized"));
     }
-    if let Some(sink) = sink {
-        // A broken or phantom audio device can stall the drain forever, so
-        // cap the wait at the synthesized duration plus a generous margin.
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(spoken_seconds as u64 + 15);
-        while !sink.empty() {
-            if std::time::Instant::now() > deadline {
-                eprintln!("[coco-tts] playback stalled; exiting without draining the sink");
-                break;
+
+    if !args.no_play {
+        if let Err(e) = play(&rendered, args.device.as_deref()) {
+            if args.out.is_some() {
+                eprintln!("[coco-tts] {e:#}; the WAV file was still written");
+            } else {
+                return Err(e);
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
     Ok(())
+}
+
+/// Append the rendered audio and block until the sink drains. Returns false
+/// if the device never consumes it within the timeout.
+fn drain(sink: &rodio::Sink, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while !sink.empty() {
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    true
+}
+
+/// Play on one device. A third of a second of silence is appended first as a
+/// liveness probe: some PipeWire-backed ALSA defaults open successfully but
+/// never run their callback thread, which would otherwise stall silently.
+fn play_on(device: &rodio::Device, rendered: &[(u32, Vec<i16>)], seconds: f32) -> bool {
+    let Ok((stream, handle)) = rodio::OutputStream::try_from_device(device) else {
+        return false;
+    };
+    let Ok(sink) = rodio::Sink::try_new(&handle) else {
+        return false;
+    };
+
+    sink.append(rodio::buffer::SamplesBuffer::new(1, 22_050, vec![0i16; 7_350]));
+    if !drain(&sink, std::time::Duration::from_secs(3)) {
+        return false;
+    }
+
+    for (rate, pcm) in rendered {
+        sink.append(rodio::buffer::SamplesBuffer::new(1, *rate, pcm.clone()));
+    }
+    if !drain(&sink, std::time::Duration::from_secs(seconds as u64 + 10)) {
+        eprintln!("[coco-tts] playback stalled near the end; dropping the rest");
+    }
+    drop(sink);
+    drop(stream);
+    true
+}
+
+/// Play the rendered segments, falling back across output devices until one
+/// actually consumes audio.
+fn play(rendered: &[(u32, Vec<i16>)], device_name: Option<&str>) -> anyhow::Result<()> {
+    let seconds: f32 = rendered
+        .iter()
+        .map(|(rate, pcm)| pcm.len() as f32 / *rate as f32)
+        .sum();
+
+    if let Some(wanted) = device_name {
+        let device = rodio::cpal::default_host().output_devices().ok().into_iter().flatten()
+            .find(|device| device.name().ok().as_deref() == Some(wanted))
+            .ok_or_else(|| anyhow!("no audio output device named '{wanted}'"))?;
+        if !play_on(&device, rendered, seconds) {
+            return Err(anyhow!("audio device '{wanted}' did not play the audio"));
+        }
+        return Ok(());
+    }
+
+    // The default gets first shot without touching the device list: probing
+    // every device spews ALSA/JACK diagnostics on stderr.
+    if let Some(default) = rodio::cpal::default_host().default_output_device() {
+        if play_on(&default, rendered, seconds) {
+            return Ok(());
+        }
+        eprintln!(
+            "[coco-tts] default audio device '{}' is not responding; trying other devices",
+            default.name().unwrap_or_else(|_| "<unnamed>".to_string())
+        );
+    }
+
+    for device in rodio::cpal::default_host().output_devices().ok().into_iter().flatten() {
+        let name = device.name().ok();
+        if name.is_none() || name.as_deref() == default_name().as_deref() {
+            continue;
+        }
+        if play_on(&device, rendered, seconds) {
+            return Ok(());
+        }
+        eprintln!(
+            "[coco-tts] audio device '{}' is not responding; trying the next one",
+            device.name().unwrap_or_else(|_| "<unnamed>".to_string())
+        );
+    }
+    Err(anyhow!(
+        "no working audio output device; pass --out <file.wav> or --no-play"
+    ))
+}
+
+fn default_name() -> Option<String> {
+    rodio::cpal::default_host()
+        .default_output_device()
+        .and_then(|device| device.name().ok())
 }
 
 fn get_lang_code(lang: &Language) -> &'static str {
