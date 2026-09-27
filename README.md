@@ -27,6 +27,24 @@ coco-tts "Hello" --device pulse
 
 Language segments always execute in flag order: `--fil`, `--en`, `--jp`, `--kr`, `--cn`. With no flags, positional text is spoken as English.
 
+## Tweaking pronunciation
+
+A user dictionary rewrites how words are spoken, without rebuilding: add lines to `~/.config/coco-tts/pronunciation.tsv` in the form `word<TAB>say it like this` (case-insensitive, whole-word, `#` starts a comment). Respellings use ordinary letters and hyphens and are applied before phonemization:
+
+```bash
+jericho	jeh-rih-koh
+coco-tts	ko-ko tee tee ess
+```
+
+Preview what will be said without synthesizing:
+
+```bash
+coco-tts "Hello Master Jericho!" --print-phonemes
+# [en] h|ə|l|ˈoʊ m|ˈæ|s|t|ɚ dʒ|ˈeɪ|ɹ|ˈɪ|k|ˈoʊ!
+```
+
+`--espeak-voice VOICE` overrides the phonemization accent for a run (e.g. `--espeak-voice en-gb` for British diphthongs). Since `--fil` has no Filipino model, it phonemizes through espeak-ng's Indonesian voice — pure vowels and stress patterns much closer to Tagalog — while synthesizing with the English model; per-word trouble cases can be corrected in the dictionary.
+
 ## Voices
 
 Voices are resolved from the [piper-voices](https://huggingface.co/rhasspy/piper-voices) collection and downloaded automatically to the platform data dir on first use (Linux `~/.local/share/coco-tts/models/`, macOS `~/Library/Application Support/coco-tts/models/`, Windows `%APPDATA%\coco-tts\models\`).
