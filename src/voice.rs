@@ -23,7 +23,7 @@ static EN: VoiceSpec = VoiceSpec {
     hf_dir: "en/en_US/lessac/medium/en_US-lessac-medium",
     fallback_note: None,
     unsupported: None,
-    espeak_override: None,
+    espeak_override: Some("id"),
 };
 
 // No Filipino Piper voice exists upstream; Tagalog text is read through the
